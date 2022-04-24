@@ -10,23 +10,504 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, comment = NA, prompt = TRUE, tidy = FALSE, fig.width = 7, fig.height = 7, fig_caption = TRUE, cache=FALSE)
 ```
 
 ```{r libraries, include=FALSE}
-library(knitr)
+if (!require(BiocManager)) install.packages("BiocManager")
+
+installifnot <- function (pkg){
+  if (!require(pkg, character.only=T)){
+    BiocManager::install(pkg)
+  }
+}
+installifnot("pd.mogene.1.0.st.v1")
+installifnot("mogene10sttranscriptcluster.db")
+installifnot("oligo")
+installifnot("limma")
+installifnot("Biobase")
+installifnot("arrayQualityMetrics")
+installifnot("genefilter")
+installifnot("annotate")
+installifnot("xtable")
+installifnot("gplots")
+installifnot("GOstats")
+installifnot("gplots")
+
+```
+\newpage
+
+# Abstract
+
+Este informe está basado en el estudio genético de individuos diferenciados por la presencia de síntomas, sin síntomas y grupo control ante la infección por SARS-CoV-2.  Gracias a esta información podemos mejorar la actuación con nuevos tratamientos y comprender mejor la enfermedad.
+
+Todos los ficheros con los datos y el código utilizados para generar este informe se pueden encontrar en un repositorio de github.^[https://github.com/alocol/Analisis-omicos-ALC.git]
+
+# Objetivos
+
+El objetivo es identificar genes que presenten una expresión diferente entre los grupos. Las muestras que se toman son de sangre, a partir de ellas se lleva a cabo el estudio sobre microarrays, los cuales nos serviran para interpreta las diferencias biológicas.
+
+# Materiales y Métodos
+
+## Software
+Para la realización de este informe se ha utilizado R (versión 3.6.2) y el interfaz RStudio. Los paquetes
+específicos para el análisis de datos de microarrays se han obtenido del proyecto Bioconductor (versión 3.6)
+que engloba los paquetes para análisis de datos ómicos más comunes.
+
+## Exploración de los datos
+Los datos públicos utilizados para este estudio se han conseguido de la base de datos Gene Expression Omnibus https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE177477. Se trata de un experimento de arrays de perfil de expresión en el que se utilizan Clariom S RNA microarray de Affymetrix (código de plataforma: GPL23159). De las 47 muestras de array se utilizaran 15 que se dividiran en 3 grupos HEALTHY (sin la enfermedad), ASYMPTOMATIC (enfermos sin síntomas), SYMPTOMATIC (enfermos con síntomas).
+
+## Workflow
+
+1. Preparación del entorno: Creación de directorios de trabajo.
+2. Obtención de datos: De la base de datos GEO y creación del fichero targets2.csv.
+3. Lectura de datos: Ficheros CEL. obtenidos de la página GEO, generando así nuestros datos rawdata.
+4. Control de calidad de datos crudos: Tanto a nivel numérico (arrayQualityMetrics()) como gráfico
+(PCA, boxplot, cluster).
+5. Normalización de datos: Usando el método RMA para generar un ExpressionSet con datos normalizados (eset_rma).
+6. Detección de genes más variables.
+8. Filtrado de genes: Filtrado de los genes menos variables (nsFilter()) y generación de un ExpressionSet con datos filtrados (eset_filtered).
+10. Diseño experimental: Creación de la matriz de diseño y de la matriz de contraste.
+11. Modelización y selección de genes: Ajuste del modelo lineal (limma()) y selección de genes.
+12. Listado de genes diferencialmente expresados: Obtención de listas de genes (topTable()) para cada una de las hipótesis a contrastar.
+13. Anotación de genes: Uso de ficheros de anotación para completar los listados de genes.
+14. Visualización de la expresión diferencial: Volcano plot.
+15. Comparaciones múltiples: Heatmaps.
+16. Significación biológica de los resultados: Uso del método Gene Enrichment Analysis y del paquete GOstats para ayudar a interpretar los resultados desde un punto de vista biológico.
+17. Resumen de resultados: Listado de los ficheros de resultados generados.
+
+# RESULTADOS Y DISCUSIÓN
+
+A continuación se desarrollan los resultados siguiendo los puntos del workflow descrito anteriormente. El código se puede encontrar en un Apéndice al final del informe. 
+
+## Preparación del directorio
+
+Una vez descargados los datos, se recomienda preparar tu directorio de trabajo, en mi caso `workingDir`. También he creado uno de datos `dataDir` y otro de resultados `resultsDir`.
+
+```{r preparacion del directorio,echo = FALSE, eval=FALSE}
+# PREPARACIÓN DEL DIRECTORIO
+setwd("C:\\Users\\Alicia Lozoya\\Desktop\\MASTER BIOINF\\Analisis de datos omicos\\PEC 1\\Analisis-omicos-ALC")
+workingDir <- getwd()
+dir.create("data")
+dir.create("results")
+dataDir <- file.path(workingDir, "data/")
+resultsDir <- file.path(workingDir, "results/")
+```
+
+## Datos para el análisis
+
+Los datos son obtenidos de la base de datos GEO (https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE177477). He descargado el documento  “GSE1777477_RAW.tar” y al descomprimirlo he extraido los 15 archivos .CEL que voy a utilizar para el estudio. El archivo *targets* lo he creado de forma manual.
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/targets.png "Ficheros de resultados")
+
+```{r fichero targets, echo = FALSE, eval=FALSE}
+#FICHERO TARGETS
+targets <- read.csv2("./data/targets2.csv", header = TRUE, sep = "," ) 
+knitr::kable(
+  targets, booktabs = TRUE,
+  caption = 'Contenido del fichero *targets2.csv* para el estudio GSE1777477')
+```
+
+## Lectura de los datos
+
+En este caso, necesito un conjunto de librerias que me permitan llevar a cabo el desarrollo del código, como puede ser el paquete `oligo` para la lectura de mis ficheros *.CEL* y el paquete de los datos asociados `pd.clariom.s.human`. A continuación se leyeron los ficheros *.CEL* con la función `list.celfiles()` y el fichero *targets2.csv* con la función `read.AnnotatedDataFrame()`. Ambos se necesitan combinar para generar el fichero. `rawData`.
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/rawdata.png "Ficheros de resultados")
+
+```{r librerias, echo = FALSE, eval=FALSE}
+#LIBRERIAS
+library(Biobase)
+library(oligo)
+library(arrayQualityMetrics)
+library(pd.clariom.s.human)
+library(limma)
+library(clariomshumantranscriptcluster.db)
+library(genefilter)
+library(gplots)
+```
+
+```{r lectura de datos codigo, results='hide', echo = FALSE, eval=FALSE}
+#Se localizan los archivos .CEL
+celFiles <- list.celfiles("./data", full.names = T)
+#Se localiza el archivo targets
+my.targets <- read.AnnotatedDataFrame(file.path("./data", "targets2.csv"), header = T, row.names = 1, sep = ",")
+#el objeto ExpressionSet `rawData`
+rawData <- read.celfiles(celFiles, phenoData = my.targets)
+pData(rawData)
+my.targets@data$Accession -> rownames(pData(rawData)) 
+colnames(rawData) <- rownames((pData(rawData)))
+```
+
+## Exploración y control de calidad
+
+### Gráficos de calidad
+
+BOXPLOT
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/BOXPLOT.png "Ficheros de resultados")
+
+```{r graficosCalidad, echo = FALSE, eval=FALSE}
+#BOXPLOT
+sampleNames <- as.character(targets$Symptons)
+boxplot(rawData, which="all",las=2, main="Intensity distribution of RAW data", cex.axis=0.6, col = c(rep("red", 5), rep("blue", 5), rep("green", 5)), names = sampleNames )
+```
+CLUSTER
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/CLUSTER.png "Ficheros de resultados")
+
+```{r graficosCalidad2, echo = FALSE, eval=FALSE}
+#HIERARQUICAL CLUSTERING
+clust.euclid.average <- hclust(dist(t(exprs(rawData))),method="average")
+plot(clust.euclid.average, labels=sampleNames, main="Hierarchical clustering of RawData", cex=0.7,  hang=-1)
+```
+
+PCA
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/PLOT.png "Ficheros de resultados")
+```{r graficosCalidad3, echo = FALSE, eval=FALSE}
+#PRINCIPAL COMPONENT ANALYSIS
+plotPCA <- function ( X, labels=NULL, colors=NULL, dataDesc="", scale=FALSE, formapunts=NULL, myCex=0.8,...)
+{
+  pcX<-prcomp(t(X), scale=scale) # o prcomp(t(X))
+  loads<- round(pcX$sdev^2/sum(pcX$sdev^2)*100,1)
+  xlab<-c(paste("PC1",loads[1],"%"))
+  ylab<-c(paste("PC2",loads[2],"%"))
+  if (is.null(colors)) colors=1
+  plot(pcX$x[,1:2],xlab=xlab,ylab=ylab, col=colors, pch=formapunts, 
+       xlim=c(min(pcX$x[,1])-100000, max(pcX$x[,1])+100000),ylim=c(min(pcX$x[,2])-100000, max(pcX$x[,2])+100000))
+  text(pcX$x[,1],pcX$x[,2], labels, pos=3, cex=myCex)
+  title(paste("Plot of first 2 PCs for expressions in", dataDesc, sep=" "), cex=0.8)
+}
+plotPCA(exprs(rawData), labels=sampleNames, dataDesc="raw data", colors=c(rep("red", 5), rep("blue", 5), rep("green", 5)), formapunts=c(rep(16,4),rep(17,4)), myCex=0.6)
+```
+
+```{r graficosCalidadAPDF, echo = FALSE, eval=FALSE}
+#GUARDAR EN UN ARCHIVO PDF
+pdf(file.path(resultsDir, "QCPlots_Raw.pdf"))
+boxplot(rawData, which="all",las=2, main="Intensity distribution of RAW data", cex.axis=0.6, col=c(rep("red", 5), rep("blue", 5), rep("green", 5)), names=sampleNames)
+plot(clust.euclid.average, labels=sampleNames, main="Hierarchical clustering of samples of RawData", 
+     cex=0.7,  hang=-1)
+plotPCA(exprs(rawData), labels=sampleNames, dataDesc="raw data", colors=c(rep("red", 5), rep("blue", 5), rep("green", 5)), formapunts=c(rep(16,4),rep(17,4)), myCex=0.6)
+dev.off()
+```
+
+### Control de calidad con el paquete `arrayQualityMetrics`
+
+El control de calidad con arrayQualityMetrics consume cierto tiempo por lo que podemos optar por ejecutarlo, o no hacerlo, usando una variable de tipo lógico.
+
+```{r control arrayqm, echo = FALSE, eval=FALSE}
+#ARRAYQM
+rerun <- FALSE
+if(rerun){
+  arrayQualityMetrics(rawData,  reporttitle="QC_RawData", force=TRUE)
+}
+```
+
+## Normalización
+
+La idea principal de la normalización es identificar y eliminar variabilidad. Existen diferentes técnicas para la normalización, en este caso voy a utilizar el RMA (Robust Multiarray Average).
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/NORMAL.png "Ficheros de resultados")
+
+```{r normalizacion, echo = FALSE, eval=FALSE}
+#MÉTODO RMA
+eset<-rma(rawData)
+write.exprs(eset, file.path(resultsDir, "NormData.txt"))
+eset
+```
+
+Para verificar si se ha producido algún cambio después de la normalización, vamos a comprobarlo mediante una gráfica como hicimos con los datos crudos. Como podemos ver la normalización ha funcionado correctamente.
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/NORMAL2.png "Ficheros de resultados")
+
+```{r graficosCalidadnorm, echo = FALSE, eval=FALSE}
+#BOXPLOT
+boxplot(eset, which="all",las=2, main="Intensity distribution of norm data", cex.axis=0.6, col = c(rep("red", 5), rep("blue", 5), rep("green", 5)), names = sampleNames )
+```
+## Detección de genes más variables
+
+Para recordar el objetivo del ejercicio, es de esperar que los genes diferencialmente expresados muestren diferencias entre muestras por lo que la varianza de estos genes debería ser superior a la de los genes que no se expresan diferencialmente. 
+
+## Filtrado
+
+A continuación se lleva a cabo el análisis de los datos filtrados. 
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/FILT.png "Ficheros de resultados")
+
+```{r filtrado, echo = FALSE, eval=FALSE}
+#FILTRADO
+library(clariomshumantranscriptcluster.db)
+library(genefilter)
+annotation(eset) <- "clariomshumantranscriptcluster.db"
+eset_filtered <- nsFilter(eset, var.func=IQR, var.cutoff=0.75, var.filter=TRUE, require.entrez = TRUE, filterByQuantile=TRUE)
+
+#NUMBER OF GENES REMOVED
+print(eset_filtered)
+```
+```{r filtrado2, echo = FALSE, eval=FALSE}
+#NUMBER OF GENES IN
+print(eset_filtered$eset)
+```
+
+La matriz de datos filtrados se extrae del objeto `filtered$eset$ y se utilizará en los pasos siguientes.
+
+```{r Datosfiltrados, echo = FALSE, eval=FALSE}
+filteredEset <- eset_filtered$eset
+filteredData <- exprs(filteredEset)
+colnames(filteredData) <- pData(eset_filtered$eset)$Accession
+```
+
+## Selección de genes
+
+Construimos un modelo lineal, es decir una matriz de diseño y una de contrastes, para el análisis.
+
+Primero la matriz de diseño:
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/MATRIZ.png "Ficheros de resultados")
+```{r linearModel, echo = FALSE, eval=FALSE}
+#MODELO LINEAL
+treat <- pData(filteredEset)$Symptons
+lev <- factor(treat, levels = unique(treat))
+design <-model.matrix(~0+lev)
+colnames(design) <- levels(lev)
+rownames(design) <- as.character(targets$Accession)
+print(design)
+```
+
+## Diseño experimental
+
+En cualquier estudio que buscamos diferencias necesitamos elegir un modelo estadístico. En este caso voy a elegir el modelo lineal, primero creo una matriz de diseño (`designMat`), que describe las condiciones experimentales aplicables a cada muestra. La matriz esta compuesta de 1, -1 y 0, perteneciendo a un grupo o no. En este caso se colocan según la presencia de síntomas o no con el control.
+
+A continuación la matriz de contraste.
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/MATRIZ2.png "Ficheros de resultados")
+
+```{r linearModel2, echo = FALSE, eval=FALSE}
+#COMPARACIÓN
+designMat <- model.matrix(~0+lev, pData(filteredEset))
+colnames(designMat) <- c("Symptomatic", "Asymptomatic",  "healthy_controls")
+```
+
+```{r diseño experimental matriz de comparaciones, echo = FALSE, eval=FALSE}
+cont.matrix <- makeContrasts(ContvsSym = healthy_controls-Symptomatic,
+ContvsAsym = healthy_controls-Asymptomatic,
+SymvsAsym = Symptomatic-Asymptomatic,
+levels = designMat)
+```
+
+```{r diseño experimental matriz de comparaciones matriz, echo = FALSE, eval=FALSE}
+cont.matrix
+```
+
+## Modelización
+
+```{r modelizacion y seleccion de genes, echo = FALSE, eval=FALSE}
+#AJUSTE DE MODELO
+fit <- lmFit(filteredData, designMat)
+fit.main <- contrasts.fit(fit, cont.matrix)
+fit.main <- eBayes(fit.main)
+```
+
+El resultado del análisis se encuentra en el objeto `lmfit` y puede extraerse con la instrucción "topTable".
+
+Recordemos que la instrucción `topTable` puede aplicar un filtro automático, basado en dos criterios distintos, "log fold change" y "p.value". Los primeros genes de esta lista son los más diferencialmente expresados. A continuación se muestran las primeras filas de los listados `topTab_ContvsSym` para el contraste *ContvsSym*, `topTab_ContvsAsym` para el contraste *ContvsAsym* y `topTab_SymvsAsym` para el contraste *SymvsAsym*.
+
+ContvsSym:
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/1.png "Ficheros de resultados")
+
+```{r results1, echo = FALSE, eval=FALSE}
+topTab_ContvsSym <- topTable(fit.main, number = nrow(fit.main), coef="ContvsSym", adjust="fdr", p.value=0.05)
+topTab_ContvsAsym <- topTable(fit.main, number = nrow(fit.main), coef="ContvsAsym", adjust="fdr", p.value=0.05)
+topTab_SymvsAsym <- topTable(fit.main, number = nrow(fit.main), coef="SymvsAsym", adjust="fdr", p.value=0.05)
+```
+
+```{r listados de genes mayormente expresados, echo = FALSE, eval=FALSE}
+head(topTab_ContvsSym)
+```
+```{r, echo = FALSE, eval=FALSE}
+head(topTab_ContvsAsym)
+```
+ContvsAsym:
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/2.png "Ficheros de resultados")
+```{r, echo = FALSE, eval=FALSE}
+head(topTab_SymvsAsym)
+```
+SymvsAsym:
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/3.png "Ficheros de resultados")
+## Anotación de los resultados
+
+Obtenemos los identificadores ENTREZ y GENE SYMBOL correspondientes a los probesets (identificados con los id de la compañía que produjo el microarray) que aparecen en la tabla de resultados.
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/tabla.png "Ficheros de resultados")
+
+```{r identificadores, echo = FALSE, eval=FALSE}
+#ANOTACIÓN
+keytypes(clariomshumantranscriptcluster.db)
+anotaciones<- AnnotationDbi::select (clariomshumantranscriptcluster.db, keys=rownames(filteredData), columns=c("ENTREZID", "SYMBOL"))
+```
+```{r anotacion de genes funcion, echo = FALSE, eval=FALSE}
+annotatedTopTable <- function(topTab, anotPackage)
+{
+  topTab <- cbind(PROBEID=rownames(topTab), topTab)
+  myProbes <- rownames(topTab)
+  thePackage <- eval(parse(text = anotPackage))
+  geneAnots <- select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+  annotatedTopTab <- merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+  return(annotatedTopTab)
+}
+topAnnotated_ContvsSym <- annotatedTopTable(topTab_ContvsSym,                         anotPackage = "clariomshumantranscriptcluster.db")
+topAnnotated_ContvsAsym <- annotatedTopTable(topTab_ContvsAsym,
+anotPackage = "clariomshumantranscriptcluster.db")
+topAnnotated_SymvsAsym <- annotatedTopTable(topTab_SymvsAsym,
+anotPackage = "clariomshumantranscriptcluster.db")
 
 ```
 
-# 1 Abstract
+```{r anotacion de genes, echo = FALSE, eval=FALSE}
+head(topAnnotated_ContvsSym)
+head(topAnnotated_ContvsAsym)
+head(topAnnotated_SymvsAsym)
+```
 
-# 2 Objetivos
-El objetivo de este trabajo es encontrar diferencias 
-# 3 Materiales y Métodos
-# 4 Resultados
-# 5 Discusión
-# 6 Conclusión
-# 7 Apéndice
-# 8 Referencias
+```{r anotacion de genes ficheros, echo = FALSE, eval=FALSE}
+write.csv(topAnnotated_ContvsSym, file="./results/topAnnotated_ContvsSym.csv")
+write.csv(topTab_ContvsAsym, file="./results/topTab_ContvsAsym.csv")
+write.csv(topTab_SymvsAsym, file="./results/topTab_SymvsAsym.csv")
+```
 
+## Visualización de resultados: Volcano Plot
+ContvsSym:
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/vol1.png "Ficheros de resultados")
+```{r volcanoPlot, echo = FALSE, eval=FALSE}
+#VOLCANOPLOT
+geneSymbols <- select(clariomshumantranscriptcluster.db, rownames(fit.main), c("SYMBOL"))
+SYMBOLS <- geneSymbols$SYMBOL
+
+genenames <- AnnotationDbi::select(clariomshumantranscriptcluster.db, rownames(fit.main), c("SYMBOL"))$SYMBOL
+volcanoplot(fit.main, coef="ContvsSym", highlight=10, names=SYMBOLS)
+abline(v = c(-3, 3))
+
+```
+
+```{r volcanoPlot2, echo = FALSE, eval=FALSE}
+volcanoplot(fit.main, coef="ContvsAsym", highlight=10, names=SYMBOLS)
+abline(v = c(-3, 3))
+```
+ContvsAsym:
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/vol2.png "Ficheros de resultados")
+SymvsAsym:
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/vol3.png "Ficheros de resultados")
+```{r volcanoPlot3, echo = FALSE, eval=FALSE}
+volcanoplot(fit.main, coef="SymvsAsym", highlight=10, names=SYMBOLS)
+abline(v = c(-3, 3))
+```
+
+## Comparaciones múltiples
+
+En estudios en los que se realizan varias comparaciones es interesante conocer qué genes se han seleccionado en cada contraste. En ocasiones, y dependiendo del estudio, pueden interesar los genes seleccionados solo en una de las comparaciones o los que se hayan seleccionado en todas. La función `decideTests()` del paquete `limma` permite hacer estas comparaciones múltiples. A continuación se muestran el número de genes diferencialemente expresados para las tres comparaciones.
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/4.png "Ficheros de resultados")
+
+```{r comparaciones multiples, echo = FALSE, eval=FALSE}
+res <- decideTests(fit.main, method = "separate", adjust.method = "fdr", p.value = 0.1, lfc = 1)
+sum.res.rows <- apply(abs(res),1,sum)
+res.selected <- res[sum.res.rows!=0,]
+print(summary(res))
+```
+Una manera muy común de representar los resultados de estas compraciones es mediante diagramas de Venn.
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/5.png "Ficheros de resultados")
+
+```{r comparaciones multiples venn, echo = FALSE, eval=FALSE}
+vennDiagram(res.selected[,1:3], cex=0.8)
+```
+En este caso se observa claramente que la amplia mayoria de los genes diferencialmente expresados se han seleccionado en las tres comparaciones.
+
+Otra forma de visualizar estas comparaciones es mediante heatmaps. En estos gráficos se utiliza un paleta de colores para resaltar diferentes niveles de expresión. Estos mapas son interesantes dado que es posible ordenar los genes seleccionados mediante clusters jerárquicos lo que puede proporcionar una mayor comprensión biológica de los resultados.
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/heatmap.png "Ficheros de resultados")
+
+```{r comparaciones multiples heatmap, echo = FALSE, eval=FALSE}
+probesInHeatmap <- rownames(res.selected)
+Heatmap <- rownames(res.selected)
+HMdata <- filteredData[rownames(filteredData) %in% probesInHeatmap,]
+geneSymbols <- select(clariomshumantranscriptcluster.db, rownames(HMdata), c("SYMBOL"))
+SYMBOLS <- geneSymbols$SYMBOL
+rownames(HMdata) <- SYMBOLS
+my_palette <- colorRampPalette(c("blue", "red"))(n =299)
+```
+
+```{r comparaciones multiples fichero, echo = FALSE, eval=FALSE}
+write.csv(HMdata, file=file.path("./results/data3Heatmap.csv"))
+```
+
+```{r comparaciones multiples heatmap plot, echo = FALSE, eval=FALSE}
+heatmap.2(HMdata, Rowv = T, Colv = T, scale = "row", col = my_palette, sepcolor = "white", sepwidth = c(0.05,0.05), cexRow = 0.5, cexCol = 0.9, key = F, density.info = "histogram", ColSideColors = c(rep("red", 5), rep("blue", 5), rep("green", 5)), tracecol = NULL, dendrogram = "both", srtCol = 30)
+```
+
+## Análisis de significación biológica
+
+A continuación realizo un análisis de enriquecimiento ("Over-Representation Analysis") a partir de la lista de genes seleccionados como diferencialmente expresados.
+
+La mayoría de programas necesitan que los identificadores de los genes sean en formato "ENTREZ" por lo que prepararemos ambas listas a la vez (aunque ya teníamos la de los genes seleccionados).
+
+```{r análisis biológico, echo = FALSE, eval=FALSE}
+#ANÁLISIS BIOLÓGICO
+library(clariomshumantranscriptcluster.db)
+probesUniverse <- rownames(filteredData)
+entrezUniverse<- AnnotationDbi::select(clariomshumantranscriptcluster.db, probesUniverse, "ENTREZID")$ENTREZID
+topProbes <-   rownames(selectedData)
+entrezTop<- AnnotationDbi::select(clariomshumantranscriptcluster.db, topProbes, "ENTREZID")$ENTREZID
+# Eliminamos posibles duplicados
+topGenes <- entrezTop[!duplicated(entrezTop)]
+entrezUniverse <- entrezUniverse[!duplicated(entrezUniverse)]
+```
+
+Luego creamos un objeto GOHyperGParams para realizar los cálculos hipergeométricos, con la función new. El objeto GOHyperGParams tiene 7 parámetros: + geneIds = donde se define los ID de los genes de interes + universeGeneIds = donde se define los ID de los genes de referencia (puede ser todo el genoma) + annotation = donde se define la base de datos donde se va a referenciar los terminos GO buscados + ontology = donde se define el grupo de terminos GO que se van a asociar * BP = de los procesos biológicos relacionados * CC = de los componentes celulares asociados * MF = de la función molecular asociada + pvalueCutoff = donde se define el valor de p de la significancia + conditional = donde se define los parámetros de las anotaciones del paquete + testDirection = donde se define el tipo de relación que queremos estudiar.
+
+```{r createHyperparameter, echo = FALSE, eval=FALSE}
+library(GOstats)
+GOparams = new("GOHyperGParams",
+    geneIds=topGenes, universeGeneIds=entrezUniverse,
+    annotation="clariomshumantranscriptcluster.db", ontology="BP",
+    pvalueCutoff=0.01)
+```
+
+Una vez que ya se creo el objeto GOHyperGParams, podemos realizar el cálculo de enriquecimiento con la función hyperGTest() sobre el objeto creado.
+
+```{r runORAnalysis, echo = FALSE, eval=FALSE}
+GOhyper = hyperGTest(GOparams)
+```
+
+```{r summarizeORAesults, echo = FALSE, eval=FALSE}
+head(summary(GOhyper))
+```
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/term.png "Ficheros de resultados")
+
+```{r ORAreport, echo = FALSE, eval=FALSE}
+# Creamos un informe html con los resultados
+GOfilename =file.path(resultsDir, "GOResults.html")
+htmlReport(GOhyper, file = GOfilename, summary.args=list("htmlLinks"=TRUE))
+```
+
+# Resultados
+
+Con esto se podría dar por finalizado el estudio sobre los datos de microarrays pero es convieniente resumir
+los ficheros de resultados generados durante el análisis en un listado dado que en ocasiones se genera un gran
+número de ficheros.
+
+
+
+![](C:/Users/Alicia Lozoya/Desktop/MASTER BIOINF/Analisis de datos omicos/Resultados.png "Ficheros de resultados")
+
+# Conclusión
+
+Podemos decir que el grupo control y el asintomático tienen más genes que se expresan en común que en comparación con el grupo de los sintomáticos.
+
+
+# Apéndice
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+# Referencias
+
+^[http://github.com/ASPteaching/Analisis_de_datos_omicos-Materiales_para_un_curso]
 
