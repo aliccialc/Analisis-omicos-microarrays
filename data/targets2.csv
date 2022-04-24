@@ -1,0 +1,16 @@
+Accession,Title,Source name,Disease state,Symptons
+GSM5374839_S1.CEL,S1_Symptomatic,blood,SARS-CoV-2_positive,Symptomatic
+GSM5374840_S2.CEL,S2_Symptomatic,blood,SARS-CoV-2_positive,Symptomatic
+GSM5374841_S3.CEL,S3_Symptomatic,blood,SARS-CoV-2_positive,Symptomatic
+GSM5374842_S4.CEL,S4_Symptomatic,blood,SARS-CoV-2_positive,Symptomatic
+GSM5374843_S5.CEL,S5_Symptomatic,blood,SARS-CoV-2_positive,Symptomatic
+GSM5374850_S12.CEL,S12_Asymptomatic,blood,SARS-CoV-2_positive,Asymptomatic
+GSM5374851_S13.CEL,S13_Asymptomatic,blood,SARS-CoV-2_positive,Asymptomatic
+GSM5374852_S14.CEL,S14_Asymptomatic,blood,SARS-CoV-2_positive,Asymptomatic
+GSM5374853_S15.CEL,S15_Asymptomatic,blood,SARS-CoV-2_positive,Asymptomatic
+GSM5374854_S16.CEL,S16_Asymptomatic,blood,SARS-CoV-2_positive,Asymptomatic
+GSM5374868_S30.CEL,S30_Healthy_controls,blood,healthy_control,healthy_controls
+GSM5374869_S31.CEL,S31_Healthy_controls,blood,healthy_control,healthy_controls
+GSM5374870_S32.CEL,S32_Healthy_controls,blood,healthy_control,healthy_controls
+GSM5374871_S33.CEL,S33_Healthy_controls,blood,healthy_control,healthy_controls
+GSM5374872_S34.CEL,S34_Healthy_controls,blood,healthy_control,healthy_controls
